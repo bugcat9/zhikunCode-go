@@ -1,0 +1,36 @@
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
+
+# Go
+go-backend/bin/
+go-backend/dist/
+go-backend/coverage.out
+go-backend/*.test
+
+# Python
+python-service/.venv/
+python-service/venv/
+python-service/env/
+python-service/__pycache__/
+python-service/.pytest_cache/
+python-service/.mypy_cache/
+python-service/.ruff_cache/
+python-service/build/
+python-service/dist/
+python-service/*.egg-info/
