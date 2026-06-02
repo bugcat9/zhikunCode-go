@@ -5,12 +5,17 @@ FastAPI 应用 + 动态能力域路由注册
 v1.15.0: 能力域动态探测 + 按需加载路由
 """
 
+import asyncio
 import importlib
 import logging
 import os
+import sys
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 from capabilities import (
     discover_capabilities,
@@ -19,6 +24,13 @@ from capabilities import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _is_reload_enabled() -> bool:
+    value = os.getenv("PYTHON_SERVICE_RELOAD", os.getenv("UVICORN_RELOAD"))
+    if value is not None:
+        return value.lower() in {"1", "true", "yes", "on"}
+    return sys.platform != "win32"
 
 # 路由模块 → (prefix, tags) 映射
 ROUTER_PREFIX_MAP = {
@@ -121,6 +133,6 @@ if __name__ == "__main__":
         "main:app",
         host="127.0.0.1",
         port=8000,
-        reload=True,
+        reload=_is_reload_enabled(),
         log_level="info",
     )

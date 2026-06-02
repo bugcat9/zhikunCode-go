@@ -27,10 +27,16 @@ go-backend/*.test
 python-service/.venv/
 python-service/venv/
 python-service/env/
-python-service/__pycache__/
+python-service/**/__pycache__/
+python-service/**/*.py[cod]
 python-service/.pytest_cache/
 python-service/.mypy_cache/
 python-service/.ruff_cache/
 python-service/build/
 python-service/dist/
 python-service/*.egg-info/
+
+# Logs and local runtime files
+*.log
+*.tmp
+*.pid
