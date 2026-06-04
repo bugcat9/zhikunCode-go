@@ -1,13 +1,12 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
-	"time"
+
+	"go-backend/internal/python"
 )
 
 // TODO: Implement GET /api/doctor.
@@ -20,55 +19,12 @@ func doctorHandler(w http.ResponseWriter, r *http.Request) {
 			"goBackend": map[string]string{
 				"status": "ok",
 			},
-			"pythonService": checkPythonService(r.Context()),
+			"pythonService": python.CheckServiceHealth(r.Context()),
 			"sqlite":        checkSQLite(),
 			"workspace":     checkWorkspace(),
 		},
 	},
 	)
-}
-
-func checkPythonService(ctx context.Context) map[string]any {
-	start := time.Now()
-
-	client := &http.Client{
-		Timeout: 3 * time.Second,
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost:8000/api/health", nil)
-	if err != nil {
-		return map[string]any{
-			"status":  "warn",
-			"message": err.Error(),
-		}
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return map[string]any{
-			"status":    "warn",
-			"message":   "python service not reachable",
-			"error":     err.Error(),
-			"latencyMs": time.Since(start).Milliseconds(),
-		}
-	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return map[string]any{
-			"status":    "warn",
-			"message":   fmt.Sprintf("python service returned HTTP %d", resp.StatusCode),
-			"latencyMs": time.Since(start).Milliseconds(),
-		}
-	}
-
-	return map[string]any{
-		"status":    "ok",
-		"message":   "python service available",
-		"url":       "http://localhost:8000",
-		"latencyMs": time.Since(start).Milliseconds(),
-	}
 }
 
 func loadWorkspacePath() (string, error) {
