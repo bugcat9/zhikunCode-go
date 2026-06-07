@@ -105,5 +105,24 @@ func (c *Client) Capabilities(ctx context.Context) (CapabilitiesResponse, error)
 func (c *Client) CountTokens(ctx context.Context, req TokenCountRequest) (TokenCountResponse, error) {
 	var out TokenCountResponse
 	err := c.doJSON(ctx, http.MethodPost, "/api/tokenizer/count", req, &out)
+	out.normalize()
 	return out, err
+}
+
+func (c *Client) GenerateDiagram(ctx context.Context, req DiagramRequest) (DiagramResponse, error) {
+	var out pythonDiagramResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/analysis/generate-diagram", req.toPythonRequest(), &out)
+	return out.toPublic(), err
+}
+
+func (c *Client) ExtractAPIEndpoints(ctx context.Context, req APIEndpointsRequest) (APIEndpointsResponse, error) {
+	var out pythonAPIEndpointsResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/analysis/api-endpoints", req.toPythonRequest(), &out)
+	return out.toPublic(), err
+}
+
+func (c *Client) AnalyzeCodePaths(ctx context.Context, req CodePathRequest) (CodePathResponse, error) {
+	var out pythonCodePathResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/analysis/code-path", req.toPythonRequest(), &out)
+	return out.toPublic(), err
 }
