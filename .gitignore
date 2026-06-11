@@ -40,3 +40,4 @@ python-service/*.egg-info/
 *.log
 *.tmp
 *.pid
+.ai-code-assistant/

@@ -2,15 +2,22 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
+	"sync"
 
+	"go-backend/internal/engine"
 	"go-backend/internal/llm"
+	"go-backend/internal/session"
+	"go-backend/internal/storage"
 )
 
 type queryRequest struct {
 	SessionID string            `json:"session_id,omitempty"`
 	Model     string            `json:"model,omitempty"`
 	Prompt    string            `json:"prompt,omitempty"`
+	System    string            `json:"system_prompt,omitempty"`
 	Messages  []llm.ChatMessage `json:"messages,omitempty"`
 }
 
@@ -20,6 +27,11 @@ type queryResponse struct {
 	Model     string    `json:"model,omitempty"`
 	Usage     llm.Usage `json:"usage,omitempty"`
 }
+
+var (
+	querySessionsMu sync.Mutex
+	querySessions   session.Service
+)
 
 func queryHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -33,14 +45,12 @@ func queryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	messages := req.Messages
-	if len(messages) == 0 && req.Prompt != "" {
-		messages = []llm.ChatMessage{
-			{Role: llm.RoleUser, Content: req.Prompt},
-		}
+	prompt := strings.TrimSpace(req.Prompt)
+	if prompt == "" {
+		prompt = latestUserPrompt(req.Messages)
 	}
-	if len(messages) == 0 {
-		writeError(w, http.StatusBadRequest, "invalid_request", "prompt or messages is required")
+	if prompt == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "prompt is required")
 		return
 	}
 
@@ -51,19 +61,85 @@ func queryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := llm.NewOpenAICompatibleClient(cfg)
-	resp, err := client.Chat(r.Context(), llm.ChatRequest{
-		Model:    req.Model,
-		Messages: messages,
-	})
+
+	sessions, err := getQuerySessions()
 	if err != nil {
-		writeLLMError(w, err, "Failed to call LLM")
+		writeError(w, http.StatusInternalServerError, "storage_error", "Failed to open SQLite: "+err.Error())
+		return
+	}
+
+	queryEngine := engine.NewQueryEngine(client, sessions, engine.Config{})
+	result, err := queryEngine.Query(r.Context(), engine.QueryRequest{
+		SessionID:    req.SessionID,
+		Model:        req.Model,
+		Prompt:       prompt,
+		SystemPrompt: req.System,
+	})
+
+	if err != nil {
+		writeQueryError(w, err, "Failed to run query")
 		return
 	}
 
 	writeJSON(w, http.StatusOK, queryResponse{
-		SessionID: req.SessionID,
-		Text:      resp.Message.Content,
-		Model:     resp.Model,
-		Usage:     resp.Usage,
+		SessionID: result.SessionID,
+		Text:      result.Text,
+		Model:     result.Model,
+		Usage:     result.Usage,
 	})
+}
+
+func latestUserPrompt(messages []llm.ChatMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != llm.RoleUser {
+			continue
+		}
+		if content := strings.TrimSpace(messages[i].Content); content != "" {
+			return content
+		}
+	}
+	return ""
+}
+
+func writeQueryError(w http.ResponseWriter, err error, message string) {
+	var llmErr *llm.Error
+	if errors.As(err, &llmErr) {
+		writeLLMError(w, err, "Failed to call LLM")
+		return
+	}
+
+	if errors.Is(err, session.ErrInvalidSession) {
+		writeError(w, http.StatusBadRequest, "invalid_session", message+": "+err.Error())
+		return
+	}
+	if errors.Is(err, session.ErrSessionNotFound) {
+		writeError(w, http.StatusNotFound, "session_not_found", message+": "+err.Error())
+		return
+	}
+
+	writeError(w, http.StatusInternalServerError, "query_error", message+": "+err.Error())
+}
+
+func getQuerySessions() (session.Service, error) {
+	querySessionsMu.Lock()
+	defer querySessionsMu.Unlock()
+
+	if querySessions != nil {
+		return querySessions, nil
+	}
+
+	workspacePath, err := loadWorkspacePath()
+	if err != nil {
+		return nil, err
+	}
+
+	db, err := storage.OpenSQLite(storage.SQLiteConfig{
+		Path: storage.DefaultSQLitePath(workspacePath),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	querySessions = session.NewSQLiteService(db)
+	return querySessions, nil
 }
