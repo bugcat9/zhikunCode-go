@@ -19,6 +19,7 @@ type QueryResult struct {
 type Config struct {
 	DefaultSystemPrompt string
 	MaxHistoryMessages  int
+	MaxToolRounds       int
 }
 
 func (c Config) WithDefaults() Config {
@@ -27,6 +28,10 @@ func (c Config) WithDefaults() Config {
 	}
 	if c.MaxHistoryMessages <= 0 {
 		c.MaxHistoryMessages = 20
+	}
+
+	if c.MaxToolRounds <= 0 {
+		c.MaxToolRounds = 10
 	}
 	return c
 }

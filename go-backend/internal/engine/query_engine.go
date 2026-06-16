@@ -2,29 +2,36 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"go-backend/internal/llm"
 	"go-backend/internal/session"
+	"go-backend/internal/tools"
 )
+
+var ErrMaxToolRoundsExceeded = errors.New("maximum tool rounds exceeded")
 
 type QueryEngine struct {
 	LLM      llm.LLMClient
 	Sessions session.Service
+	Tools    tools.ToolRegistry
 	Config   Config
 }
 
-func NewQueryEngine(llmClient llm.LLMClient, sessions session.Service, cfg Config) *QueryEngine {
+func NewQueryEngine(llmClient llm.LLMClient, sessions session.Service, toolRegistry tools.ToolRegistry, cfg Config) *QueryEngine {
 	return &QueryEngine{
 		LLM:      llmClient,
 		Sessions: sessions,
+		Tools:    toolRegistry,
 		Config:   cfg.WithDefaults(),
 	}
 }
 
-// Query 执行第四阶段的纯文本对话流程：
-// session -> history -> LLM -> persisted assistant message.
+// Query 执行第五阶段的最小 agent 循环：
+// session -> history -> LLM -> optional tools -> LLM -> final assistant message.
 func (e *QueryEngine) Query(ctx context.Context, req QueryRequest) (QueryResult, error) {
 	// 先检查 QueryEngine 是否正确组装，避免后面出现不清楚的空指针错误。
 	if e == nil {
@@ -71,29 +78,111 @@ func (e *QueryEngine) Query(ctx context.Context, req QueryRequest) (QueryResult,
 		return QueryResult{}, err
 	}
 
-	// 第四阶段只做非流式纯文本对话，工具调用和流式输出后面阶段再接。
-	resp, err := e.LLM.Chat(ctx, llm.ChatRequest{
-		Model:    req.Model,
-		Messages: messages,
-	})
+	return e.runLoop(ctx, sess.ID, req.Model, messages)
+}
+
+func (e *QueryEngine) runLoop(ctx context.Context, sessionID string, model string, messages []llm.ChatMessage) (QueryResult, error) {
+	var totalUsage llm.Usage
+	var lastModel string
+	toolDefinitions := e.toolDefinitions()
+
+	for round := 0; ; round++ {
+		resp, err := e.LLM.Chat(ctx, llm.ChatRequest{
+			Model:    model,
+			Messages: messages,
+			Tools:    toolDefinitions,
+		})
+		if err != nil {
+			return QueryResult{}, err
+		}
+		addUsage(&totalUsage, resp.Usage)
+		if resp.Model != "" {
+			lastModel = resp.Model
+		}
+
+		// 没有 tool call 就说明模型已经给出最终文本，可以持久化 assistant 回复。
+		if len(resp.Message.ToolCalls) == 0 {
+			if err := e.Sessions.AppendMessage(ctx, sessionID, session.Message{
+				Role:    resp.Message.Role,
+				Content: resp.Message.Content,
+			}); err != nil {
+				return QueryResult{}, err
+			}
+
+			return QueryResult{
+				SessionID: sessionID,
+				Text:      resp.Message.Content,
+				Model:     lastModel,
+				Usage:     totalUsage,
+			}, nil
+		}
+
+		if round >= e.Config.MaxToolRounds {
+			return QueryResult{}, ErrMaxToolRoundsExceeded
+		}
+
+		// tool call 本身必须放回 messages；紧跟着再放 tool result。
+		// 这两类消息只参与本轮内存上下文，当前 SQLite schema 先只持久化用户消息和最终回答。
+		messages = append(messages, resp.Message)
+		for _, call := range resp.Message.ToolCalls {
+			messages = append(messages, e.runToolCall(ctx, call))
+		}
+	}
+}
+
+func (e *QueryEngine) toolDefinitions() []llm.ToolDefinition {
+	if e.Tools == nil {
+		return nil
+	}
+	return e.Tools.Definitions()
+}
+
+func (e *QueryEngine) runToolCall(ctx context.Context, call llm.ToolCall) llm.ChatMessage {
+	result := tools.ToolResult{}
+	runErr := error(nil)
+
+	if e.Tools == nil {
+		runErr = errors.New("tool registry is not configured")
+		return llm.ChatMessage{
+			Role:       llm.RoleTool,
+			ToolCallID: call.ID,
+			Content:    encodeToolResult(result, runErr),
+		}
+	}
+
+	tool, ok := e.Tools.Get(call.Name)
+	if !ok {
+		runErr = fmt.Errorf("tool %q is not registered", call.Name)
+	} else {
+		result, runErr = tool.Run(ctx, call.Arguments)
+	}
+
+	return llm.ChatMessage{
+		Role:       llm.RoleTool,
+		ToolCallID: call.ID,
+		Content:    encodeToolResult(result, runErr),
+	}
+}
+
+func encodeToolResult(result tools.ToolResult, runErr error) string {
+	if runErr != nil && result.Error == "" {
+		result.Error = runErr.Error()
+	}
+	if result.Content == "" && result.Data == nil && result.Error == "" {
+		result.Content = "ok"
+	}
+
+	data, err := json.Marshal(result)
 	if err != nil {
-		return QueryResult{}, err
+		return fmt.Sprintf(`{"error":%q}`, err.Error())
 	}
+	return string(data)
+}
 
-	// 保存助手回复，下一轮对话才能把它作为历史上下文传给 LLM。
-	if err := e.Sessions.AppendMessage(ctx, sess.ID, session.Message{
-		Role:    resp.Message.Role,
-		Content: resp.Message.Content,
-	}); err != nil {
-		return QueryResult{}, err
-	}
-
-	return QueryResult{
-		SessionID: sess.ID,
-		Text:      resp.Message.Content,
-		Model:     resp.Model,
-		Usage:     resp.Usage,
-	}, nil
+func addUsage(total *llm.Usage, usage llm.Usage) {
+	total.PromptTokens += usage.PromptTokens
+	total.CompletionTokens += usage.CompletionTokens
+	total.TotalTokens += usage.TotalTokens
 }
 
 // buildMessages 把会话里的历史消息转换成 LLM client 需要的 chat messages。

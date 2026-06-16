@@ -11,6 +11,7 @@ import (
 	"go-backend/internal/llm"
 	"go-backend/internal/session"
 	"go-backend/internal/storage"
+	"go-backend/internal/tools"
 )
 
 type queryRequest struct {
@@ -68,7 +69,19 @@ func queryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	queryEngine := engine.NewQueryEngine(client, sessions, engine.Config{})
+	workspacePath, err := loadWorkspacePath()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "workspace_error", "Failed to resolve workspace: "+err.Error())
+		return
+	}
+
+	toolRegistry, err := tools.NewDefaultRegistry(workspacePath, nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "tool_registry_error", "Failed to initialize tools: "+err.Error())
+		return
+	}
+
+	queryEngine := engine.NewQueryEngine(client, sessions, toolRegistry, engine.Config{})
 	result, err := queryEngine.Query(r.Context(), engine.QueryRequest{
 		SessionID:    req.SessionID,
 		Model:        req.Model,
@@ -114,6 +127,10 @@ func writeQueryError(w http.ResponseWriter, err error, message string) {
 	}
 	if errors.Is(err, session.ErrSessionNotFound) {
 		writeError(w, http.StatusNotFound, "session_not_found", message+": "+err.Error())
+		return
+	}
+	if errors.Is(err, engine.ErrMaxToolRoundsExceeded) {
+		writeError(w, http.StatusInternalServerError, "max_tool_rounds_exceeded", message+": "+err.Error())
 		return
 	}
 
