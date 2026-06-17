@@ -53,14 +53,17 @@ type ToolCall struct {
 type LLMEventType string
 
 const (
-	LLMEventDelta LLMEventType = "delta"
-	LLMEventDone  LLMEventType = "done"
-	LLMEventError LLMEventType = "error"
+	LLMEventDelta    LLMEventType = "delta"
+	LLMEventToolCall LLMEventType = "tool_call"
+	LLMEventDone     LLMEventType = "done"
+	LLMEventError    LLMEventType = "error"
 )
 
 type LLMEvent struct {
-	Type  LLMEventType `json:"type"`
-	Text  string       `json:"text,omitempty"`
-	Usage Usage        `json:"usage,omitempty"`
-	Error string       `json:"error,omitempty"`
+	Type     LLMEventType `json:"type"`
+	Text     string       `json:"text,omitempty"`
+	Model    string       `json:"model,omitempty"`
+	ToolCall *ToolCall    `json:"tool_call,omitempty"`
+	Usage    Usage        `json:"usage,omitempty"`
+	Error    string       `json:"error,omitempty"`
 }

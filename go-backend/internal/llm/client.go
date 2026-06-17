@@ -94,10 +94,7 @@ func (c *OpenAICompatibleClient) Chat(ctx context.Context, req ChatRequest) (Cha
 }
 
 func (c *OpenAICompatibleClient) Stream(ctx context.Context, req ChatRequest) (<-chan LLMEvent, error) {
-	return nil, &Error{
-		Kind:    ErrorKindUnexpected,
-		Message: "llm stream is not implemented yet",
-	}
+	return c.stream(ctx, req)
 }
 
 func toOpenAIMessages(messages []ChatMessage) []openai.ChatCompletionMessageParamUnion {

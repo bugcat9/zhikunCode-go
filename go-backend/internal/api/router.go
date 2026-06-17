@@ -9,6 +9,7 @@ func NewRouter() http.Handler {
 	mux.HandleFunc("GET /api/doctor", doctorHandler)
 	mux.HandleFunc("GET /api/config", configHandler)
 	mux.HandleFunc("POST /api/query", queryHandler)
+	mux.HandleFunc("POST /api/query/stream", streamQueryHandler)
 	mux.HandleFunc("GET /api/python/capabilities", pythonCapabilitiesHandler)
 	mux.HandleFunc("POST /api/tokenizer/count", tokenizerCountHandler)
 	mux.HandleFunc("POST /api/code-diagrams/generate", codeDiagramGenerateHandler)

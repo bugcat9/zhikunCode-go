@@ -13,8 +13,9 @@ import (
 )
 
 type fakeLLM struct {
-	requests  []llm.ChatRequest
-	responses []llm.ChatResponse
+	requests        []llm.ChatRequest
+	responses       []llm.ChatResponse
+	streamResponses [][]llm.LLMEvent
 }
 
 func (f *fakeLLM) Chat(ctx context.Context, req llm.ChatRequest) (llm.ChatResponse, error) {
@@ -28,7 +29,19 @@ func (f *fakeLLM) Chat(ctx context.Context, req llm.ChatRequest) (llm.ChatRespon
 }
 
 func (f *fakeLLM) Stream(ctx context.Context, req llm.ChatRequest) (<-chan llm.LLMEvent, error) {
-	return nil, errors.New("not implemented")
+	f.requests = append(f.requests, req)
+	if len(f.streamResponses) == 0 {
+		return nil, errors.New("missing fake stream response")
+	}
+	events := f.streamResponses[0]
+	f.streamResponses = f.streamResponses[1:]
+
+	ch := make(chan llm.LLMEvent, len(events))
+	for _, event := range events {
+		ch <- event
+	}
+	close(ch)
+	return ch, nil
 }
 
 type fakeTool struct {
