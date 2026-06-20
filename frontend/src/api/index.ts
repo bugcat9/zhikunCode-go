@@ -25,6 +25,8 @@ export {
 // 消息分发器
 export { dispatch, resetSequence } from './dispatch';
 
+export { sendPermissionDecision } from './permissions';
+
 // INC-4 fix: WebSocketProvider.tsx 已删除（死代码），WebSocket 由 stompClient.ts + hooks/useWebSocket.ts 提供
 
 // MCP Capability Store

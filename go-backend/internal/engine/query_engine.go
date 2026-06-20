@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"go-backend/internal/llm"
+	"go-backend/internal/permission"
 	"go-backend/internal/session"
 	"go-backend/internal/tools"
 )
@@ -15,10 +16,11 @@ import (
 var ErrMaxToolRoundsExceeded = errors.New("maximum tool rounds exceeded")
 
 type QueryEngine struct {
-	LLM      llm.LLMClient
-	Sessions session.Service
-	Tools    tools.ToolRegistry
-	Config   Config
+	LLM         llm.LLMClient
+	Sessions    session.Service
+	Tools       tools.ToolRegistry
+	Permissions permission.PermissionBroker
+	Config      Config
 }
 
 func NewQueryEngine(llmClient llm.LLMClient, sessions session.Service, toolRegistry tools.ToolRegistry, cfg Config) *QueryEngine {
@@ -28,6 +30,11 @@ func NewQueryEngine(llmClient llm.LLMClient, sessions session.Service, toolRegis
 		Tools:    toolRegistry,
 		Config:   cfg.WithDefaults(),
 	}
+}
+
+func (e *QueryEngine) SetPermissionBroker(broker permission.PermissionBroker) *QueryEngine {
+	e.Permissions = broker
+	return e
 }
 
 // Query 执行第五阶段的最小 agent 循环：
@@ -125,7 +132,7 @@ func (e *QueryEngine) runLoop(ctx context.Context, sessionID string, model strin
 		// 这两类消息只参与本轮内存上下文，当前 SQLite schema 先只持久化用户消息和最终回答。
 		messages = append(messages, resp.Message)
 		for _, call := range resp.Message.ToolCalls {
-			messages = append(messages, e.runToolCall(ctx, call))
+			messages = append(messages, e.runToolCall(ctx, sessionID, call))
 		}
 	}
 }
@@ -137,7 +144,7 @@ func (e *QueryEngine) toolDefinitions() []llm.ToolDefinition {
 	return e.Tools.Definitions()
 }
 
-func (e *QueryEngine) runToolCall(ctx context.Context, call llm.ToolCall) llm.ChatMessage {
+func (e *QueryEngine) runToolCall(ctx context.Context, sessionID string, call llm.ToolCall) llm.ChatMessage {
 	result := tools.ToolResult{}
 	runErr := error(nil)
 
@@ -154,7 +161,15 @@ func (e *QueryEngine) runToolCall(ctx context.Context, call llm.ToolCall) llm.Ch
 	if !ok {
 		runErr = fmt.Errorf("tool %q is not registered", call.Name)
 	} else {
-		result, runErr = tool.Run(ctx, call.Arguments)
+		allowed, decision, err := e.authorizeToolCall(ctx, sessionID, call)
+		if err != nil {
+			runErr = err
+		} else if !allowed {
+			result = permissionDeniedResult(decision)
+			runErr = permission.ErrPermissionDenied
+		} else {
+			result, runErr = tool.Run(ctx, call.Arguments)
+		}
 	}
 
 	return llm.ChatMessage{

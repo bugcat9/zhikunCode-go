@@ -136,7 +136,19 @@ func (e *QueryEngine) runStreamLoop(ctx context.Context, events chan<- Event, se
 					return QueryResult{}, ctx.Err()
 				}
 
-				toolMessage := e.runToolCall(ctx, call)
+				if req, ok := e.permissionRequestEvent(sessionID, call); ok {
+					if !sendEvent(ctx, events, Event{
+						Type:      EventPermissionRequest,
+						SessionID: sessionID,
+						ToolName:  call.Name,
+						ToolUseID: call.ID,
+						Payload:   req,
+					}) {
+						return QueryResult{}, ctx.Err()
+					}
+				}
+
+				toolMessage := e.runToolCall(ctx, sessionID, call)
 				toolMessages = append(toolMessages, toolMessage)
 				if !sendEvent(ctx, events, Event{
 					Type:      EventToolResult,

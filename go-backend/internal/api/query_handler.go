@@ -75,13 +75,21 @@ func queryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	toolRegistry, err := tools.NewDefaultRegistry(workspacePath, nil)
+	broker, err := getPermissionBroker()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "permission_error", "Failed to initialize permissions: "+err.Error())
+		return
+	}
+
+	toolRegistry, err := tools.NewDefaultRegistryWithOptions(workspacePath, nil, tools.RegistryOptions{
+		AllowWrites: true,
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "tool_registry_error", "Failed to initialize tools: "+err.Error())
 		return
 	}
 
-	queryEngine := engine.NewQueryEngine(client, sessions, toolRegistry, engine.Config{})
+	queryEngine := engine.NewQueryEngine(client, sessions, toolRegistry, engine.Config{}).SetPermissionBroker(broker)
 	result, err := queryEngine.Query(r.Context(), engine.QueryRequest{
 		SessionID:    req.SessionID,
 		Model:        req.Model,

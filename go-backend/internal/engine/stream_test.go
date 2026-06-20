@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"go-backend/internal/llm"
+	"go-backend/internal/permission"
 	"go-backend/internal/session"
 	"go-backend/internal/tools"
 )
@@ -95,5 +96,72 @@ func TestQueryEngineStreamRunsToolLoop(t *testing.T) {
 	}
 	if persisted[1].Content != "final answer" {
 		t.Fatalf("persisted assistant = %#v", persisted[1])
+	}
+}
+
+func TestQueryEngineStreamEmitsPermissionRequest(t *testing.T) {
+	llmClient := &fakeLLM{
+		streamResponses: [][]llm.LLMEvent{
+			{
+				{
+					Type: llm.LLMEventToolCall,
+					ToolCall: &llm.ToolCall{
+						ID:        "call_1",
+						Name:      "fake_lookup",
+						Arguments: json.RawMessage(`{"query":"repo"}`),
+					},
+				},
+				{Type: llm.LLMEventDone},
+			},
+			{
+				{Type: llm.LLMEventDelta, Text: "done"},
+				{Type: llm.LLMEventDone},
+			},
+		},
+	}
+	broker := &fakePermissionBroker{
+		hint: permission.DecisionHint{
+			Action:    permission.HintAsk,
+			RiskLevel: permission.RiskMedium,
+			Reason:    "test confirmation required",
+		},
+		decision: permission.PermissionDecision{
+			RequestID: "call_1",
+			ToolUseID: "call_1",
+			Decision:  permission.DecisionDeny,
+			Reason:    "denied in test",
+		},
+	}
+	engine := NewQueryEngine(llmClient, session.NewMemoryService(), tools.NewRegistry(&fakeTool{}), Config{MaxToolRounds: 3}).
+		SetPermissionBroker(broker)
+
+	stream, err := engine.Stream(context.Background(), QueryRequest{Prompt: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var events []Event
+	for event := range stream {
+		events = append(events, event)
+	}
+
+	wantTypes := []EventType{
+		EventMessageStart,
+		EventToolUseStart,
+		EventPermissionRequest,
+		EventToolResult,
+		EventStreamDelta,
+		EventMessageComplete,
+	}
+	if len(events) != len(wantTypes) {
+		t.Fatalf("event count = %d, want %d: %#v", len(events), len(wantTypes), events)
+	}
+	for i, want := range wantTypes {
+		if events[i].Type != want {
+			t.Fatalf("event[%d].Type = %q, want %q; events=%#v", i, events[i].Type, want, events)
+		}
+	}
+	if events[2].ToolUseID != "call_1" || events[2].ToolName != "fake_lookup" {
+		t.Fatalf("permission event is malformed: %#v", events[2])
 	}
 }

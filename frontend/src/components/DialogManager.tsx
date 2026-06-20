@@ -14,6 +14,7 @@ import { useActivityStore } from '@/store/activityStore';
 import { useAppUiStore } from '@/store/appUiStore';
 import { useSessionStore } from '@/store/sessionStore';
 import { sendToServer, sendPermissionResponse } from '@/api/stompClient';
+import { sendPermissionDecision } from '@/api/permissions';
 import PermissionDialog from '@/components/permission/PermissionDialog';
 import { ElicitationDialog } from '@/components/dialog/ElicitationDialog';
 import { SettingsPanel } from '@/components/dialog/SettingsPanel';
@@ -32,6 +33,9 @@ export const DialogManager: React.FC = () => {
             decision.remember,
             decision.scope
         );
+        void sendPermissionDecision(decision).catch((error) => {
+            console.warn('[Permission] Failed to send REST decision:', error);
+        });
         // 2. 更新本地 store 状态
         respondPermission(decision);
         clearPendingPermission();

@@ -10,6 +10,10 @@ type Registry struct {
 	tools map[string]Tool
 }
 
+type RegistryOptions struct {
+	AllowWrites bool
+}
+
 func NewRegistry(toolList ...Tool) *Registry {
 	registry := &Registry{
 		tools: make(map[string]Tool),
@@ -21,6 +25,10 @@ func NewRegistry(toolList ...Tool) *Registry {
 }
 
 func NewDefaultRegistry(workspacePath string, pythonClient *python.Client) (*Registry, error) {
+	return NewDefaultRegistryWithOptions(workspacePath, pythonClient, RegistryOptions{})
+}
+
+func NewDefaultRegistryWithOptions(workspacePath string, pythonClient *python.Client, opts RegistryOptions) (*Registry, error) {
 	listFiles, err := NewListFilesTool(workspacePath)
 	if err != nil {
 		return nil, err
@@ -29,7 +37,7 @@ func NewDefaultRegistry(workspacePath string, pythonClient *python.Client) (*Reg
 	if err != nil {
 		return nil, err
 	}
-	writeFile, err := NewWriteFileTool(workspacePath, false)
+	writeFile, err := NewWriteFileTool(workspacePath, opts.AllowWrites)
 	if err != nil {
 		return nil, err
 	}

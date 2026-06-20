@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"go-backend/internal/llm"
+	"go-backend/internal/permission"
 	"go-backend/internal/session"
 	"go-backend/internal/tools"
 )
@@ -72,6 +73,31 @@ func (t *fakeTool) Run(ctx context.Context, input json.RawMessage) (tools.ToolRe
 		Data: map[string]any{
 			"seen_input": string(input),
 		},
+	}, nil
+}
+
+type fakePermissionBroker struct {
+	hint     permission.DecisionHint
+	decision permission.PermissionDecision
+	requests []permission.PermissionRequest
+}
+
+func (b *fakePermissionBroker) Hint(req permission.PermissionRequest) permission.DecisionHint {
+	if b.hint.Action != "" {
+		return b.hint
+	}
+	return permission.DecisionHint{Action: permission.HintAllow, RiskLevel: permission.RiskLow}
+}
+
+func (b *fakePermissionBroker) Request(ctx context.Context, req permission.PermissionRequest) (permission.PermissionDecision, error) {
+	b.requests = append(b.requests, req)
+	if b.decision.Decision != "" {
+		return b.decision, nil
+	}
+	return permission.PermissionDecision{
+		RequestID: req.ID,
+		ToolUseID: req.ToolUseID,
+		Decision:  permission.DecisionAllow,
 	}, nil
 }
 
@@ -175,5 +201,59 @@ func TestQueryEngineStopsAfterMaxToolRounds(t *testing.T) {
 	_, err := engine.Query(context.Background(), QueryRequest{Prompt: "loop forever"})
 	if !errors.Is(err, ErrMaxToolRoundsExceeded) {
 		t.Fatalf("expected ErrMaxToolRoundsExceeded, got %v", err)
+	}
+}
+
+func TestQueryEngineDoesNotRunToolWhenPermissionDenied(t *testing.T) {
+	llmClient := &fakeLLM{
+		responses: []llm.ChatResponse{
+			{
+				Message: llm.ChatMessage{
+					Role: llm.RoleAssistant,
+					ToolCalls: []llm.ToolCall{
+						{ID: "call_1", Name: "fake_lookup", Arguments: json.RawMessage(`{"query":"repo"}`)},
+					},
+				},
+			},
+			{
+				Message: llm.ChatMessage{Role: llm.RoleAssistant, Content: "permission noted"},
+			},
+		},
+	}
+	tool := &fakeTool{}
+	broker := &fakePermissionBroker{
+		hint: permission.DecisionHint{
+			Action:    permission.HintAsk,
+			RiskLevel: permission.RiskMedium,
+			Reason:    "test confirmation required",
+		},
+		decision: permission.PermissionDecision{
+			RequestID: "call_1",
+			ToolUseID: "call_1",
+			Decision:  permission.DecisionDeny,
+			Reason:    "denied in test",
+		},
+	}
+	engine := NewQueryEngine(llmClient, session.NewMemoryService(), tools.NewRegistry(tool), Config{MaxToolRounds: 3}).
+		SetPermissionBroker(broker)
+
+	result, err := engine.Query(context.Background(), QueryRequest{Prompt: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Text != "permission noted" {
+		t.Fatalf("expected final answer after denied tool result, got %q", result.Text)
+	}
+	if len(tool.input) != 0 {
+		t.Fatalf("tool should not have been executed, got input %s", tool.input)
+	}
+	if len(broker.requests) != 1 || broker.requests[0].ToolName != "fake_lookup" {
+		t.Fatalf("permission broker did not receive tool request: %#v", broker.requests)
+	}
+
+	secondMessages := llmClient.requests[1].Messages
+	toolResult := secondMessages[len(secondMessages)-1]
+	if !strings.Contains(toolResult.Content, "permission denied: denied in test") {
+		t.Fatalf("permission denial was not returned to LLM: %s", toolResult.Content)
 	}
 }
