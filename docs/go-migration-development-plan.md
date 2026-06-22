@@ -435,7 +435,120 @@ type PermissionPolicy interface {
 - 前端可以批准或拒绝工具。
 - 用户拒绝后，tool_result 告知 LLM 权限被拒。
 
-## 12. 第八阶段：SubAgent
+## 12. 第八阶段：前端兼容接口补齐
+
+目标：补齐当前 React 前端已经依赖、但 Go 后端尚未提供的主后端接口，让 `VITE_API_URL=http://localhost:8081` 时前端可以逐步脱离 Java 后端。
+
+需要覆盖的接口族：
+
+```text
+/ws
+/api/models
+/api/sessions
+/api/mcp
+```
+
+建议拆分：
+
+```text
+/ws
+  SockJS/STOMP 兼容入口，优先支持前端现有 stompClient.ts 的连接、订阅和 publish 路径。
+
+/api/models
+  返回可用模型列表、默认模型、provider 元数据，供前端 Header/模型切换使用。
+
+/api/sessions
+  创建、查询、分页列出、删除会话，并返回会话历史消息。
+
+/api/mcp
+  MCP servers、resources、prompts、capabilities 的查询、执行、重连和开关接口。
+```
+
+最小接口清单：
+
+```text
+GET    /api/models
+
+GET    /api/sessions
+POST   /api/sessions
+GET    /api/sessions/{sessionId}
+DELETE /api/sessions/{sessionId}
+GET    /api/sessions/{sessionId}/messages
+
+GET    /api/mcp/resources
+GET    /api/mcp/resources/read
+GET    /api/mcp/prompts
+POST   /api/mcp/prompts/execute
+GET    /api/mcp/capabilities
+GET    /api/mcp/capabilities/domains
+POST   /api/mcp/reconnect
+
+GET    /ws
+```
+
+WebSocket / STOMP 最小目标：
+
+```text
+CONNECT headers:
+  Authorization
+  X-Session-Id
+
+Client publish:
+  /app/bind-session
+  /app/chat
+  /app/permission
+  /app/interrupt
+  /app/model
+  /app/permission-mode
+  /app/command
+  /app/mcp
+  /app/rewind
+  /app/elicitation
+  /app/ping
+
+Server subscribe:
+  /user/queue/messages
+```
+
+事件兼容目标：
+
+```text
+stream_delta
+thinking_delta
+tool_use_start
+tool_use_input
+tool_use_progress
+tool_result
+permission_request
+message_complete
+error
+cost_update
+session_restored
+pong
+model_changed
+permission_mode_changed
+command_result
+session_list_updated
+```
+
+关键设计：
+
+- 先实现前端能连上、能恢复 session、能发送消息、能收到流式事件的最小闭环。
+- `/api/sessions` 复用 SQLite session/message 存储，不另起一套内存状态。
+- `/api/models` 从 LLM 配置派生，避免前端硬编码 provider。
+- `/api/mcp` 第一版可以返回空列表和明确的 `disabled/unavailable` 状态，但响应结构要稳定。
+- `/ws` 可以先做与现有前端兼容的 STOMP 子集，不追求完整 broker。
+- 保留 SSE `/api/query/stream`，WebSocket 主要用于主前端兼容和双向控制消息。
+
+验收标准：
+
+- 前端 `.env.development` 切到 `VITE_API_URL=http://localhost:8081` 后，页面不会因为缺少 `/api/models`、`/api/sessions`、`/api/mcp` 基础接口而启动失败。
+- `stompClient.ts` 可以连接 `/ws`，订阅 `/user/queue/messages`，并完成 `/app/ping` -> `pong`。
+- 前端可以创建或恢复 session，并通过 `/app/chat` 收到一轮最小流式响应。
+- MCP 未启用时，前端能展示空状态或不可用状态，而不是接口 404。
+- 所有接口都有最小单元测试或 curl/WebSocket 验证脚本。
+
+## 13. 第九阶段：SubAgent
 
 目标：主 agent 可以创建子 agent 执行独立任务。
 
@@ -483,7 +596,7 @@ go func() {
 - 子 agent 独立执行，结果返回主 agent。
 - 父 context cancel 后，子 agent 停止。
 
-## 13. 第九阶段：Coordinator / Multi-Agent
+## 14. 第十阶段：Coordinator / Multi-Agent
 
 目标：实现多 Agent 分工、并发执行和汇总。
 
@@ -523,7 +636,7 @@ Go 学习点：
 - Coordinator 能汇总结果。
 - 可限制最大并发数。
 
-## 14. 后期：逐步替换 Python Service
+## 15. 后期：逐步替换 Python Service
 
 Python 不必一开始替换。推荐顺序：
 
@@ -548,7 +661,7 @@ Go Backend
   -> optional Python Plugin
 ```
 
-## 15. 与前端的迁移策略
+## 16. 与前端的迁移策略
 
 第一阶段不要强行兼容 Spring STOMP/SockJS。
 
@@ -558,7 +671,8 @@ Go Backend
 2. 新增 Go API client，用于测试 `/api/query` 和 `/api/query/stream`。
 3. 单独做一个 Go Chat 页面或开发开关。
 4. Go SSE 稳定后，再替换主聊天流。
-5. 最后视情况实现普通 WebSocket。
+5. 补齐 `/ws`、`/api/models`、`/api/sessions`、`/api/mcp` 兼容阶段。
+6. 前端默认 `VITE_API_URL` 切到 Go 后端。
 
 临时环境变量：
 
@@ -567,7 +681,7 @@ VITE_JAVA_API_BASE=http://localhost:8080
 VITE_GO_API_BASE=http://localhost:8081
 ```
 
-## 16. 建议开发顺序清单
+## 17. 建议开发顺序清单
 
 - [ ] 新建 `go-backend/go.mod`
 - [ ] 实现 `cmd/server/main.go`
@@ -586,11 +700,15 @@ VITE_GO_API_BASE=http://localhost:8081
 - [ ] 实现 read/list/write/python tools
 - [ ] 实现 SSE stream
 - [ ] 实现 permission broker
+- [ ] 实现 `/api/models`
+- [ ] 实现 `/api/sessions`
+- [ ] 实现 `/api/mcp`
+- [ ] 实现 `/ws` STOMP 兼容子集
 - [ ] 实现 SubAgent
 - [ ] 实现 Coordinator
 - [ ] 按能力迁移 Python Service
 
-## 17. 每个阶段的完成定义
+## 18. 每个阶段的完成定义
 
 每个阶段必须满足：
 
@@ -600,7 +718,7 @@ VITE_GO_API_BASE=http://localhost:8081
 - 不破坏现有 Java/Python/Frontend 的启动方式。
 - 文档记录新增接口和环境变量。
 
-## 18. 第一周推荐任务
+## 19. 第一周推荐任务
 
 第一周只做 Go 后端骨架和 Python 调用，不碰 Agent。
 
@@ -630,7 +748,7 @@ curl http://localhost:8081/api/health
 curl http://localhost:8081/api/python/capabilities
 ```
 
-## 19. 第二周推荐任务
+## 20. 第二周推荐任务
 
 第二周开始做 LLM 和 QueryEngine。
 
@@ -646,7 +764,7 @@ Day 6: 多轮对话
 Day 7: 错误处理和测试
 ```
 
-## 20. 第三周推荐任务
+## 21. 第三周推荐任务
 
 第三周做工具调用。
 
@@ -662,7 +780,7 @@ Day 6: QueryEngine tool loop
 Day 7: 最大轮数、错误恢复、测试
 ```
 
-## 21. 第四周推荐任务
+## 22. 第四周推荐任务
 
 第四周做流式输出和权限。
 
@@ -678,7 +796,23 @@ Day 6: 前端最小接入
 Day 7: 联调和测试
 ```
 
-## 22. 关键提醒
+## 23. 第五周推荐任务
+
+第五周补齐前端兼容接口，让主前端可以切到 Go 后端做完整联调。
+
+推荐目标：
+
+```text
+Day 1: /api/models + 前端模型切换联调
+Day 2: /api/sessions 创建、列表、删除
+Day 3: session 历史消息和 session_restored
+Day 4: /api/mcp resources/prompts/capabilities 空状态兼容
+Day 5: /ws STOMP CONNECT、subscribe、publish 子集
+Day 6: /app/chat、/app/ping、/app/permission 联调
+Day 7: 前端 VITE_API_URL 切到 8081 验收
+```
+
+## 24. 关键提醒
 
 - 不要一开始重写全部 Java。
 - 不要一开始追求完整 STOMP 兼容。
@@ -688,7 +822,7 @@ Day 7: 联调和测试
 - 所有外部调用都必须带 context timeout。
 - 多 Agent 一定要先做 cancel 和 timeout，再做复杂协作。
 
-## 23. 推荐的第一个 PR / Commit 范围
+## 25. 推荐的第一个 PR / Commit 范围
 
 第一个开发提交建议只包含：
 
