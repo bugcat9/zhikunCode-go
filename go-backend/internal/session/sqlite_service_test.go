@@ -64,3 +64,54 @@ func TestSQLiteServicePersistsSessionMessages(t *testing.T) {
 		t.Fatalf("expected session %q, got %q", sess.ID, loaded.ID)
 	}
 }
+
+func TestSQLiteServiceListAndDeleteSessions(t *testing.T) {
+	db, err := storage.OpenSQLite(storage.SQLiteConfig{
+		Path: filepath.Join(t.TempDir(), "data.db"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	service := NewSQLiteService(db)
+	ctx := context.Background()
+
+	first, err := service.Create(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.AppendMessage(ctx, first.ID, Message{
+		Role:    llm.RoleUser,
+		Content: "hello",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.Create(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := service.List(ctx, ListOptions{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Sessions) != 1 || !list.HasMore || list.NextCursor == "" {
+		t.Fatalf("unexpected first page: %#v", list)
+	}
+
+	next, err := service.List(ctx, ListOptions{Limit: 10, Cursor: list.NextCursor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next.Sessions) != 1 {
+		t.Fatalf("unexpected second page: %#v", next)
+	}
+
+	if err := service.Delete(ctx, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Get(ctx, second.ID); err != ErrSessionNotFound {
+		t.Fatalf("expected ErrSessionNotFound after delete, got %v", err)
+	}
+}

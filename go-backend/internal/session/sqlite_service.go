@@ -17,6 +17,13 @@ func NewSQLiteService(db *sql.DB) *SQLiteService {
 	return &SQLiteService{db: db}
 }
 
+func (s *SQLiteService) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Close()
+}
+
 func (s *SQLiteService) Create(ctx context.Context) (Session, error) {
 	now := time.Now().UTC()
 	sess := Session{
@@ -85,6 +92,101 @@ func (s *SQLiteService) GetOrCreate(ctx context.Context, sessionID string) (Sess
 		return Session{}, err
 	}
 	return s.Create(ctx)
+}
+
+func (s *SQLiteService) List(ctx context.Context, opts ListOptions) (ListResult, error) {
+	limit := normalizeListLimit(opts.Limit)
+	cursorUpdatedAt, cursorID, err := decodeCursor(opts.Cursor)
+	if err != nil {
+		return ListResult{}, err
+	}
+
+	query := `
+SELECT s.id, s.title, s.created_at, s.updated_at, COUNT(m.id) AS message_count
+FROM sessions s
+LEFT JOIN messages m ON m.session_id = s.id`
+	args := []any{}
+	if !cursorUpdatedAt.IsZero() {
+		query += `
+WHERE s.updated_at < ? OR (s.updated_at = ? AND s.id < ?)`
+		formatted := formatTime(cursorUpdatedAt)
+		args = append(args, formatted, formatted, cursorID)
+	}
+	query += `
+GROUP BY s.id, s.title, s.created_at, s.updated_at
+ORDER BY s.updated_at DESC, s.id DESC
+LIMIT ?`
+	args = append(args, limit+1)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return ListResult{}, err
+	}
+	defer rows.Close()
+
+	summaries := make([]Summary, 0, limit+1)
+	for rows.Next() {
+		var summary Summary
+		var title sql.NullString
+		var createdAt string
+		var updatedAt string
+		if err := rows.Scan(&summary.ID, &title, &createdAt, &updatedAt, &summary.MessageCount); err != nil {
+			return ListResult{}, err
+		}
+		if title.Valid {
+			summary.Title = title.String
+		}
+		if summary.CreatedAt, err = parseTime(createdAt); err != nil {
+			return ListResult{}, err
+		}
+		if summary.UpdatedAt, err = parseTime(updatedAt); err != nil {
+			return ListResult{}, err
+		}
+		summaries = append(summaries, summary)
+	}
+	if err := rows.Err(); err != nil {
+		return ListResult{}, err
+	}
+
+	result := ListResult{}
+	if len(summaries) > limit {
+		result.HasMore = true
+		summaries = summaries[:limit]
+	}
+	result.Sessions = summaries
+	if result.HasMore && len(result.Sessions) > 0 {
+		last := result.Sessions[len(result.Sessions)-1]
+		result.NextCursor = encodeCursor(last.UpdatedAt, last.ID)
+	}
+	return result, nil
+}
+
+func (s *SQLiteService) Delete(ctx context.Context, sessionID string) error {
+	if sessionID == "" {
+		return ErrInvalidSession
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE session_id = ?`, sessionID); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, sessionID)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrSessionNotFound
+	}
+	return tx.Commit()
 }
 
 func (s *SQLiteService) AppendMessage(ctx context.Context, sessionID string, message Message) error {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"sort"
 	"sync"
 	"time"
 )
@@ -63,6 +64,72 @@ func (s *MemoryService) GetOrCreate(ctx context.Context, sessionID string) (Sess
 		return Session{}, err
 	}
 	return s.Create(ctx)
+}
+
+func (s *MemoryService) List(ctx context.Context, opts ListOptions) (ListResult, error) {
+	limit := normalizeListLimit(opts.Limit)
+	cursorUpdatedAt, cursorID, err := decodeCursor(opts.Cursor)
+	if err != nil {
+		return ListResult{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	summaries := make([]Summary, 0, len(s.sessions))
+	for _, sess := range s.sessions {
+		summaries = append(summaries, Summary{
+			ID:           sess.ID,
+			Title:        sess.Title,
+			CreatedAt:    sess.CreatedAt,
+			UpdatedAt:    sess.UpdatedAt,
+			MessageCount: len(s.messages[sess.ID]),
+		})
+	}
+	sort.Slice(summaries, func(i, j int) bool {
+		if summaries[i].UpdatedAt.Equal(summaries[j].UpdatedAt) {
+			return summaries[i].ID > summaries[j].ID
+		}
+		return summaries[i].UpdatedAt.After(summaries[j].UpdatedAt)
+	})
+
+	if !cursorUpdatedAt.IsZero() {
+		filtered := summaries[:0]
+		for _, item := range summaries {
+			if item.UpdatedAt.Before(cursorUpdatedAt) ||
+				(item.UpdatedAt.Equal(cursorUpdatedAt) && item.ID < cursorID) {
+				filtered = append(filtered, item)
+			}
+		}
+		summaries = filtered
+	}
+
+	result := ListResult{}
+	if len(summaries) > limit {
+		result.HasMore = true
+		summaries = summaries[:limit]
+	}
+	result.Sessions = append(result.Sessions, summaries...)
+	if result.HasMore && len(result.Sessions) > 0 {
+		last := result.Sessions[len(result.Sessions)-1]
+		result.NextCursor = encodeCursor(last.UpdatedAt, last.ID)
+	}
+	return result, nil
+}
+
+func (s *MemoryService) Delete(ctx context.Context, sessionID string) error {
+	if sessionID == "" {
+		return ErrInvalidSession
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.sessions[sessionID]; !ok {
+		return ErrSessionNotFound
+	}
+	delete(s.sessions, sessionID)
+	delete(s.messages, sessionID)
+	return nil
 }
 
 func (s *MemoryService) AppendMessage(ctx context.Context, sessionID string, message Message) error {
