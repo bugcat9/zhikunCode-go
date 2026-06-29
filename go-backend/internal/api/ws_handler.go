@@ -18,7 +18,6 @@ import (
 	"go-backend/internal/llm"
 	"go-backend/internal/permission"
 	"go-backend/internal/session"
-	"go-backend/internal/tools"
 )
 
 var (
@@ -525,19 +524,12 @@ func newWebSocketQueryEngine() (*engine.QueryEngine, error) {
 		return nil, err
 	}
 
-	toolRegistry, err := tools.NewDefaultRegistryWithOptions(workspacePath, nil, tools.RegistryOptions{
-		AllowWrites: true,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return engine.NewQueryEngine(
+	return newRuntimeQueryEngine(
 		llm.NewOpenAICompatibleClient(cfg),
 		sessions,
-		toolRegistry,
-		engine.Config{},
-	).SetPermissionBroker(broker), nil
+		workspacePath,
+		broker,
+	)
 }
 
 func serverMessagesFromEngineEvent(event engine.Event) []map[string]any {

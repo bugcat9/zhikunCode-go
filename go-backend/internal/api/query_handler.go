@@ -11,7 +11,6 @@ import (
 	"go-backend/internal/llm"
 	"go-backend/internal/session"
 	"go-backend/internal/storage"
-	"go-backend/internal/tools"
 )
 
 type queryRequest struct {
@@ -81,15 +80,12 @@ func queryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	toolRegistry, err := tools.NewDefaultRegistryWithOptions(workspacePath, nil, tools.RegistryOptions{
-		AllowWrites: true,
-	})
+	queryEngine, err := newRuntimeQueryEngine(client, sessions, workspacePath, broker)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "tool_registry_error", "Failed to initialize tools: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "query_engine_error", "Failed to initialize QueryEngine: "+err.Error())
 		return
 	}
 
-	queryEngine := engine.NewQueryEngine(client, sessions, toolRegistry, engine.Config{}).SetPermissionBroker(broker)
 	result, err := queryEngine.Query(r.Context(), engine.QueryRequest{
 		SessionID:    req.SessionID,
 		Model:        req.Model,

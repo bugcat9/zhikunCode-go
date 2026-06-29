@@ -7,7 +7,6 @@ import (
 
 	"go-backend/internal/engine"
 	"go-backend/internal/llm"
-	"go-backend/internal/tools"
 )
 
 func streamQueryHandler(w http.ResponseWriter, r *http.Request) {
@@ -61,20 +60,12 @@ func streamQueryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	toolRegistry, err := tools.NewDefaultRegistryWithOptions(workspacePath, nil, tools.RegistryOptions{
-		AllowWrites: true,
-	})
+	queryEngine, err := newRuntimeQueryEngine(llm.NewOpenAICompatibleClient(cfg), sessions, workspacePath, broker)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "tool_registry_error", "Failed to initialize tools: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "query_engine_error", "Failed to initialize QueryEngine: "+err.Error())
 		return
 	}
 
-	queryEngine := engine.NewQueryEngine(
-		llm.NewOpenAICompatibleClient(cfg),
-		sessions,
-		toolRegistry,
-		engine.Config{},
-	).SetPermissionBroker(broker)
 	events, err := queryEngine.Stream(r.Context(), engine.QueryRequest{
 		SessionID:    req.SessionID,
 		Model:        req.Model,

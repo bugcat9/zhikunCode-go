@@ -48,8 +48,8 @@ func (p *DefaultPolicy) Decide(req PermissionRequest) DecisionHint {
 			Reason:    "permission mode deny_all rejects every tool call",
 		}
 	case ModeReadOnly:
-		if isReadOnlyTool(req.ToolName) {
-			return allow(RiskLow, "read-only tool is allowed in read_only mode")
+		if isLowRiskTool(req.ToolName) {
+			return allow(RiskLow, "non-mutating tool is allowed in read_only mode")
 		}
 		return DecisionHint{
 			Action:    HintDeny,
@@ -57,7 +57,7 @@ func (p *DefaultPolicy) Decide(req PermissionRequest) DecisionHint {
 			Reason:    "permission mode read_only rejects tools that can modify state",
 		}
 	case ModeReadWrite:
-		if isReadOnlyTool(req.ToolName) || isWriteTool(req.ToolName) {
+		if isLowRiskTool(req.ToolName) || isWriteTool(req.ToolName) {
 			return allow(toolRisk(req.ToolName), "read and write file tools are allowed in read_write mode")
 		}
 		return defaultToolHint(req.ToolName)
@@ -97,8 +97,8 @@ func (p *DefaultPolicy) boundaryHint(req PermissionRequest) (DecisionHint, bool)
 
 func defaultToolHint(toolName string) DecisionHint {
 	switch {
-	case isReadOnlyTool(toolName):
-		return allow(RiskLow, "read-only tool is allowed by default")
+	case isLowRiskTool(toolName):
+		return allow(RiskLow, "non-mutating tool is allowed by default")
 	case isWriteTool(toolName):
 		return DecisionHint{
 			Action:    HintAsk,
@@ -131,9 +131,22 @@ func toolRisk(toolName string) RiskLevel {
 	return RiskLow
 }
 
+func isLowRiskTool(toolName string) bool {
+	return isReadOnlyTool(toolName) || isDelegationTool(toolName)
+}
+
 func isReadOnlyTool(toolName string) bool {
 	switch normalizeToolName(toolName) {
 	case "read_file", "list_files":
+		return true
+	default:
+		return false
+	}
+}
+
+func isDelegationTool(toolName string) bool {
+	switch normalizeToolName(toolName) {
+	case "task_create":
 		return true
 	default:
 		return false

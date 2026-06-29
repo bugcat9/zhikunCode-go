@@ -21,6 +21,22 @@ func TestDefaultPolicyAllowsReadToolsByDefault(t *testing.T) {
 	}
 }
 
+func TestDefaultPolicyAllowsTaskCreateByDefault(t *testing.T) {
+	policy := NewPolicy(ModeAsk)
+
+	hint := policy.Decide(PermissionRequest{
+		ToolName: "task_create",
+		Input:    json.RawMessage(`{"instruction":"summarize internal/agent"}`),
+	})
+
+	if hint.Action != HintAllow {
+		t.Fatalf("expected task_create to be allowed, got %#v", hint)
+	}
+	if hint.RiskLevel != RiskLow {
+		t.Fatalf("expected low risk, got %#v", hint)
+	}
+}
+
 func TestDefaultPolicyAsksForWritesByDefault(t *testing.T) {
 	policy := NewPolicy(ModeAsk)
 
